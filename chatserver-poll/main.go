@@ -3,7 +3,6 @@ package main
 import (
 	"log"
 	"net"
-	"slices"
 
 	"golang.org/x/sys/unix"
 )
@@ -13,8 +12,8 @@ var L_ADDR = "[::1]:1111"
 
 var fds []unix.PollFd
 var conns = map[int]net.Conn{}
-var blacklistWrite = map[int]struct{}{}
-var trashcan = map[int]struct{}{}
+var blacklistWrite = map[int]struct{}{} // int -> fd
+var blacklistRead = map[int]struct{}{}  // int -> fd
 
 func main() {
 	ln, err := net.Listen("tcp", L_ADDR)
@@ -37,7 +36,9 @@ func main() {
 		panic(err)
 	}
 
-	log.Println("Now polling for TCP server on", L_ADDR)
+	blacklistWrite[lnfd] = struct{}{} // NEVER LET broadcast() WRITE
+
+	log.Printf("Now polling for TCP server on %s (fd: %d)", L_ADDR, lnfd)
 
 	startPolling(ln, lnfd)
 }
@@ -66,8 +67,31 @@ func startPolling(ln net.Listener, lnfd int) {
 
 		log.Printf("there's %d fd doing new thing", n)
 
-		for _, fd := range fds { // let's check each fds
+		for i := 0; i < len(fds); i++ { // let's check each fds
+			fd := fds[i]
 			ifd := int(fd.Fd)
+
+			if fd.Revents&(unix.POLLERR|unix.POLLHUP|unix.POLLNVAL) != 0 { // shit gone wrong
+				log.Printf("got POLLERR/POLLHUP/POLLNVAL on fd %d. yeeting away", ifd)
+				makeItVanish(i)
+				i--
+				continue // take 2
+			}
+
+			if fd.Revents&unix.POLLRDHUP != 0 { // a client legit said "i don't wanna hear u but i will speak anyway"
+				// from whom?
+				switch ifd {
+				case lnfd: // FROM LISTENER?!?!?!???
+					panic("MAMAAAAAK THE KING HAS FALLEN!!!")
+				default:
+					blacklistRead[ifd] = struct{}{}                  // "son, don't talk to him"
+					fds[i].Events &^= (unix.POLLIN | unix.POLLRDHUP) // unsubscribe
+				}
+
+				log.Printf("that kid with fd %d shut our mouth off, but still wanna yap. ok. gotcha.", ifd)
+
+				continue
+			}
 
 			if fd.Revents&unix.POLLIN != 0 { // something is coming
 				// from whom?
@@ -80,6 +104,7 @@ func startPolling(ln net.Listener, lnfd int) {
 
 					connFile, err := GetConnFile(conn)
 					if err != nil {
+						conn.Close()
 						continue // nyeh.
 					}
 
@@ -87,19 +112,24 @@ func startPolling(ln net.Listener, lnfd int) {
 
 					if err := unix.SetNonblock(connFd, true); err != nil {
 						// we cannot NOT block it???
+						conn.Close()
 						continue // nyeh.
 					}
 
 					// attach the conn to fds
 					fds = append(fds, unix.PollFd{
 						Fd:     int32(connFd),
-						Events: unix.POLLIN,
+						Events: (unix.POLLIN | unix.POLLRDHUP),
 					})
 
 					conns[connFd] = conn
 					log.Printf("  new guest! look! it's fd is %d!", connFd)
 				default: // beyond listener?
 					if _, ok := conns[ifd]; !ok { // if we don't know, just ignore
+						continue
+					}
+
+					if _, dont := blacklistRead[ifd]; dont { // momma said, "don't talk to him" coz "he say so". oh.
 						continue
 					}
 
@@ -116,10 +146,9 @@ func startPolling(ln net.Listener, lnfd int) {
 							break
 						}
 
-						// TODO: handle half-read close
-
 						if err != nil || n == 0 {
-							trashcan[ifd] = struct{}{}
+							makeItVanish(i)
+							i--
 							break
 						}
 
@@ -135,51 +164,53 @@ func startPolling(ln net.Listener, lnfd int) {
 				log.Printf("  ah... nothing on %d...", ifd)
 			}
 		}
-
-		cleanupFds()
 	}
 }
 
 func broadcast(bfd int, d []byte) {
-	for _, pfd := range fds {
-		fd := int(pfd.Fd)
+	for i := 0; i < len(fds); i++ {
+		f := fds[i]
+		fd := int(f.Fd)
 		if _, dont := blacklistWrite[fd]; dont || fd == bfd {
 			continue
 		}
 
-		if _, err := unix.Write(fd, d); err != nil {
-			switch err {
-			case unix.EPIPE:
-				unix.Shutdown(fd, unix.SHUT_WR)
-				blacklistWrite[fd] = struct{}{} // shh. don't talk
-				log.Printf("    %d closed read on their end", fd)
-			default:
-				trashcan[bfd] = struct{}{}
+		for {
+			if _, err := unix.Write(fd, d); err != nil {
+				switch err {
+				case unix.EAGAIN:
+					continue
+				case unix.EPIPE:
+					unix.Shutdown(fd, unix.SHUT_WR)
+					blacklistWrite[fd] = struct{}{} // shh. don't talk
+					log.Printf("    %d closed read on their end", fd)
+				default:
+					// problem: the reader's forEach index is likely affected
+					makeItVanish(i)
+					i--
+					continue
+				}
 			}
+
+			break
 		}
 	}
 }
 
-func cleanupFds() {
-	// we moonwalk, coz if you try to delete slices forward,
-	// the billie jeans blame you for the kids
-	for i := len(fds) - 1; i >= 0; i-- {
-		f := fds[i]
-		fd := int(f.Fd)
+func cleanupFd(fd int) {
+	conns[fd].Close() // this closes fd already.
 
-		if _, ok := trashcan[fd]; !ok {
-			continue
-		}
+	delete(conns, fd)
+	delete(blacklistWrite, fd)
+	delete(blacklistRead, fd)
+}
 
-		unix.Close(fd)
-		conns[fd].Close()
+func makeItVanish(indx int) {
+	fd := int(fds[indx].Fd)
 
-		delete(conns, fd)
-		delete(blacklistWrite, fd)
-		fds = slices.Delete(fds, i, i+1)
+	fds[indx] = fds[len(fds)-1] // move the latest crab here
+	fds = fds[:len(fds)-1]      // make the last thing vanish
 
-		delete(trashcan, fd)
-
-		log.Printf("  bye %d~", fd)
-	}
+	cleanupFd(fd)
+	log.Printf("  bye %d~", fd)
 }
