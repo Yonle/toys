@@ -13,7 +13,6 @@ var L_ADDR = "[::1]:1111"
 var fds []unix.PollFd
 var conns = map[int]net.Conn{}
 var blacklistWrite = map[int]struct{}{} // int -> fd
-var blacklistRead = map[int]struct{}{}  // int -> fd
 
 func main() {
 	ln, err := net.Listen("tcp", L_ADDR)
@@ -65,35 +64,31 @@ func startPolling(ln net.Listener, lnfd int) {
 			continue
 		}
 
-		log.Printf("there's %d fd doing new thing", n)
-
 		for i := 0; i < len(fds); i++ { // let's check each fds
-			fd := fds[i]
-			ifd := int(fd.Fd)
+			ifd := int(fds[i].Fd)
 
-			if fd.Revents&(unix.POLLERR|unix.POLLHUP|unix.POLLNVAL) != 0 { // shit gone wrong
+			if fds[i].Revents&(unix.POLLERR|unix.POLLHUP|unix.POLLNVAL) != 0 { // shit gone wrong
 				log.Printf("got POLLERR/POLLHUP/POLLNVAL on fd %d. yeeting away", ifd)
 				makeItVanish(i)
 				i--
 				continue // take 2
 			}
 
-			if fd.Revents&unix.POLLRDHUP != 0 { // a client legit said "i don't wanna hear u but i will speak anyway"
+			if fds[i].Revents&unix.POLLRDHUP != 0 { // a client legit said "i don't wanna hear u but i will speak anyway"
 				// from whom?
 				switch ifd {
 				case lnfd: // FROM LISTENER?!?!?!???
 					panic("MAMAAAAAK THE KING HAS FALLEN!!!")
 				default:
-					blacklistRead[ifd] = struct{}{}                  // "son, don't talk to him"
 					fds[i].Events &^= (unix.POLLIN | unix.POLLRDHUP) // unsubscribe
 				}
 
-				log.Printf("that kid with fd %d shut our mouth off, but still wanna yap. ok. gotcha.", ifd)
+				log.Printf("that kid with fd %d shut his ears off, but still wanna hear us yap. gotcha", ifd)
 
 				continue
 			}
 
-			if fd.Revents&unix.POLLIN != 0 { // something is coming
+			if fds[i].Revents&unix.POLLIN != 0 { // something is coming
 				// from whom?
 				switch ifd {
 				case lnfd: // from listener? accept new guest
@@ -129,10 +124,6 @@ func startPolling(ln net.Listener, lnfd int) {
 						continue
 					}
 
-					if _, dont := blacklistRead[ifd]; dont { // momma said, "don't talk to him" coz "he say so". oh.
-						continue
-					}
-
 					log.Printf("  new event on %d!", ifd)
 
 					// make buffer...
@@ -157,11 +148,6 @@ func startPolling(ln net.Listener, lnfd int) {
 						broadcast(ifd, d)
 					}
 				}
-			} else {
-				if ifd == lnfd {
-					continue // ignore listener
-				}
-				log.Printf("  ah... nothing on %d...", ifd)
 			}
 		}
 	}
@@ -184,11 +170,12 @@ func broadcast(bfd int, d []byte) {
 					unix.Shutdown(fd, unix.SHUT_WR)
 					blacklistWrite[fd] = struct{}{} // shh. don't talk
 					log.Printf("    %d closed read on their end", fd)
+					break
 				default:
 					// problem: the reader's forEach index is likely affected
 					makeItVanish(i)
 					i--
-					continue
+					break
 				}
 			}
 
@@ -202,7 +189,6 @@ func cleanupFd(fd int) {
 
 	delete(conns, fd)
 	delete(blacklistWrite, fd)
-	delete(blacklistRead, fd)
 }
 
 func makeItVanish(indx int) {
