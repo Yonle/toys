@@ -154,7 +154,7 @@ func broadcast(bfd int, d []byte) {
 
 			switch {
 			case err == unix.EAGAIN:
-				continue
+				break
 			case err == unix.EPIPE:
 				unix.Shutdown(fd, unix.SHUT_WR)
 				blacklistWrite[fd] = struct{}{} // shh. don't talk
