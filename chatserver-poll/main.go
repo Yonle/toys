@@ -2,7 +2,6 @@ package main
 
 import (
 	"log"
-	"net"
 
 	"golang.org/x/sys/unix"
 )
@@ -10,7 +9,7 @@ import (
 var BUF_SIZE = 4096
 var L_ADDR = "[::1]:1111"
 
-var lnfd int
+var l *Listener // listener
 var fds []unix.PollFd
 var blacklistWrite = make(map[int]struct{}) // int -> fd
 
@@ -18,52 +17,22 @@ var blacklistWrite = make(map[int]struct{}) // int -> fd
 
 func main() {
 	var err error
-	lnfd, err = unix.Socket(
-		unix.AF_INET6,
-		(unix.SOCK_STREAM | unix.SOCK_CLOEXEC | unix.SOCK_NONBLOCK),
-		unix.IPPROTO_TCP)
+
+	l, err = makeListener()
 	if err != nil {
-		panic(err)
+		log.Fatalln("failed to make listener:", err)
 	}
 
-	unix.SetsockoptInt(lnfd, unix.SOL_SOCKET, unix.SO_REUSEADDR, 1)
-	unix.SetsockoptInt(lnfd, unix.SOL_SOCKET, unix.SO_REUSEPORT, 1)
-
-	var addr *net.TCPAddr
-	addr, err = net.ResolveTCPAddr("tcp6", L_ADDR)
+	err = l.ListenInet6(L_ADDR)
 	if err != nil {
-		panic(err)
+		log.Fatalln("failed to listen:", err)
 	}
 
-	var iface *net.Interface
-	var zoneid uint32
-	iface, err = net.InterfaceByName(addr.Zone)
-	if err == nil {
-		zoneid = uint32(iface.Index)
-	}
+	blacklistWrite[l.Fd] = struct{}{} // NEVER LET broadcast() WRITE
 
-	sockAddr := &unix.SockaddrInet6{
-		Port:   addr.Port,
-		Addr:   [16]byte(addr.IP.To16()),
-		ZoneId: zoneid,
-	}
+	log.Printf("Now polling for TCP server on %s (fd: %d)", L_ADDR, l.Fd)
 
-	err = unix.Bind(lnfd, sockAddr)
-	if err != nil {
-		log.Fatalf("bind() failed: %v", err)
-	}
-
-	err = unix.Listen(lnfd, unix.SOMAXCONN)
-
-	if err != nil {
-		log.Fatalf("listen() failed: %v", err)
-	}
-
-	blacklistWrite[lnfd] = struct{}{} // NEVER LET broadcast() WRITE
-
-	log.Printf("Now polling for TCP server on %s (fd: %d)", L_ADDR, lnfd)
-
-	startPolling(lnfd)
+	startPolling(l.Fd)
 }
 
 func startPolling(lnfd int) {
@@ -135,15 +104,10 @@ func startPolling(lnfd int) {
 
 func handleNewGuest() {
 	// let's accept new guest!
-	nfd, _, err := unix.Accept(lnfd)
-	if err != nil {
-		log.Println("warn: i couldn't accept connection:", err)
-		return
-	}
+	nfd, _, err := l.Accept()
 
-	if err := unix.SetNonblock(nfd, true); err != nil {
-		unix.Close(nfd)
-		log.Println("C_err: this fd couldn't set as noniblock:", err)
+	if err != nil {
+		log.Println("  failed to accept new fd:", err)
 		return
 	}
 
