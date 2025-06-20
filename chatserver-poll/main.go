@@ -168,6 +168,11 @@ func handleGuest(nfd int) (removeDisFd bool) {
 			return
 		}
 
+		if n == 0 {
+			removeDisFd = true
+			return
+		}
+
 		broadcast(nfd, buf[:n])
 	}
 }
