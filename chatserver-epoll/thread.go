@@ -3,14 +3,16 @@ package main
 import (
 	"log"
 	"sync"
+	"syscall"
 
+	"github.com/Yonle/go-epoll"
 	"golang.org/x/sys/unix"
 )
 
 type Thread struct {
 	B int // Buffer size
 	L *Listener
-	E *Epoll
+	E *epoll.Instance
 
 	bw    map[int]struct{} // blacklist write
 	conns map[int]struct{}
@@ -40,14 +42,14 @@ func MakeThread(L_ADDR string, BUFSIZE int) (t *Thread, err error) {
 		return
 	}
 
-	t.E, err = NewEpoll()
+	t.E, err = epoll.NewInstance(0)
 	if err != nil {
 		return
 	}
 
 	t.bw[t.L.Fd] = struct{}{}
 
-	ev := MakeEvent(t.L.Fd, (unix.EPOLLIN | unix.EPOLLRDHUP))
+	ev := epoll.MakeEvent(t.L.Fd, (unix.EPOLLIN | unix.EPOLLRDHUP))
 	err = t.E.Add(t.L.Fd, ev)
 	if err != nil {
 		return
@@ -62,7 +64,7 @@ func MakeThread(L_ADDR string, BUFSIZE int) (t *Thread, err error) {
 }
 
 func (t *Thread) StartWaiting() (err error) {
-	events := make([]unix.EpollEvent, 512)
+	events := make([]syscall.EpollEvent, 512)
 
 	var n int
 	for {
@@ -115,7 +117,7 @@ func (t *Thread) handleNewConn() {
 		return
 	}
 
-	ev := MakeEvent(nfd, (unix.EPOLLIN | unix.EPOLLRDHUP))
+	ev := epoll.MakeEvent(nfd, (unix.EPOLLIN | unix.EPOLLRDHUP))
 	t.E.Add(nfd, ev)
 	log.Printf("  look! new guest! it's fd %d!", nfd)
 
