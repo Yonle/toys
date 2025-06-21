@@ -59,41 +59,38 @@ func startPolling(lnfd int) {
 		}
 
 		for i := 0; i < len(fds); i++ { // let's check each fds
-			ifd := int(fds[i].Fd)
+			fd := int(fds[i].Fd)
 
 			if fds[i].Revents&(unix.POLLERR|unix.POLLHUP|unix.POLLNVAL) != 0 { // shit gone wrong
-				log.Printf("got POLLERR/POLLHUP/POLLNVAL on fd %d. yeeting away", ifd)
+				log.Printf("got POLLERR/POLLHUP/POLLNVAL on fd %d. yeeting away", fd)
 				makeItVanish(i)
+				unix.Close(fd)
 				i--
 				continue // take 2
 			}
 
-			if fds[i].Revents&unix.POLLRDHUP != 0 { // a client legit said "i don't wanna hear u but i will speak anyway"
+			if fds[i].Revents&unix.POLLRDHUP != 0 { // something half closed
 				// from whom?
-				switch ifd {
+				switch fd {
 				case lnfd: // FROM LISTENER?!?!?!???
 					panic("MAMAAAAAK THE KING HAS FALLEN!!!")
-				default:
-					//	fds[i].Events &^= (unix.POLLIN | unix.POLLRDHUP) // unsubscribe
+				default: // it's hard to deal with half-read close due to schrodinger situation
 					makeItVanish(i)
+					unix.Close(fd)
 					i--
 				}
-
-				// log.Printf("that kid with fd %d shut his ears off, but still wanna hear us yap. gotcha", ifd)
-
 				continue
 			}
 
 			if fds[i].Revents&unix.POLLIN != 0 { // something is coming
 				// from whom?
-				switch ifd {
+				switch fd {
 				case lnfd: // from listener? accept new guest
 					handleNewGuest()
 				default: // beyond listener?
-					removeDisFd := handleGuest(ifd)
+					removeDisFd := handleGuest(fd)
 					if removeDisFd {
-						makeItVanish(i)
-						i--
+						unix.Close(fd)
 						continue
 					}
 				}
@@ -119,11 +116,11 @@ func handleNewGuest() {
 	log.Printf("  look! new guest! it's fd %d!", nfd)
 }
 
-func handleGuest(nfd int) (removeDisFd bool) {
+func handleGuest(fd int) (removeDisFd bool) {
 	buf := make([]byte, BUF_SIZE)
 
 	for {
-		n, err := unix.Read(nfd, buf)
+		n, err := unix.Read(fd, buf)
 		switch {
 		case err == unix.EAGAIN:
 			return // we're done reading
@@ -137,7 +134,7 @@ func handleGuest(nfd int) (removeDisFd bool) {
 			return
 		}
 
-		broadcast(nfd, buf[:n])
+		broadcast(fd, buf[:n])
 	}
 }
 
@@ -160,9 +157,7 @@ func broadcast(bfd int, d []byte) {
 				blacklistWrite[fd] = struct{}{} // shh. don't talk
 				log.Printf("    %d closed read on their end", fd)
 			case err != nil:
-				// problem: the reader's forEach index is likely affected
-				makeItVanish(i)
-				i--
+				unix.Close(fd)
 			}
 
 			break
@@ -176,7 +171,6 @@ func makeItVanish(indx int) {
 	fds[indx] = fds[len(fds)-1] // move the latest crab here
 	fds = fds[:len(fds)-1]      // make the last thing vanish
 
-	unix.Close(fd)
 	delete(blacklistWrite, fd)
 
 	log.Printf("  bye %d~", fd)
