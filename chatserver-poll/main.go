@@ -13,8 +13,6 @@ var l *Listener // listener
 var fds []unix.PollFd
 var blacklistWrite = make(map[int]struct{}) // int -> fd
 
-// TODO: refactor this mess
-
 func main() {
 	var err error
 
