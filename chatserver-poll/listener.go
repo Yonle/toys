@@ -38,8 +38,8 @@ func (l *Listener) ListenInet6(l_addr string) (err error) {
 	iface, err = net.InterfaceByName(addr.Zone)
 	if err == nil {
 		zoneid = uint32(iface.Index)
-		err = nil // we could ignore it
 	}
+	err = nil // we could ignore it
 
 	sockAddr := &unix.SockaddrInet6{
 		Port:   addr.Port,
