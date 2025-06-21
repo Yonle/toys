@@ -146,21 +146,14 @@ func broadcast(bfd int, d []byte) {
 			continue
 		}
 
-		for {
-			_, err := unix.Write(fd, d)
+		_, err := unix.Write(fd, d)
 
-			switch {
-			case err == unix.EAGAIN:
-				break
-			case err == unix.EPIPE:
-				unix.Shutdown(fd, unix.SHUT_WR)
-				blacklistWrite[fd] = struct{}{} // shh. don't talk
-				log.Printf("    %d closed read on their end", fd)
-			case err != nil:
-				unix.Close(fd)
-			}
-
-			break
+		switch {
+		case err == unix.EPIPE:
+			blacklistWrite[fd] = struct{}{} // shh. don't talk
+			log.Printf("    %d closed read on their end", fd)
+		case err != nil:
+			unix.Close(fd)
 		}
 	}
 }
