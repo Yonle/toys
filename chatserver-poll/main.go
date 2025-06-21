@@ -80,7 +80,7 @@ func startPolling(lnfd int) {
 				continue
 			}
 
-			if fds[i].Revents&unix.POLLIN != 0 { // something is coming
+			if fds[i].Revents&unix.POLLIN != 0 { // something is ready to be feed again
 				// from whom?
 				switch fd {
 				case lnfd: // from listener? accept new guest
@@ -92,6 +92,11 @@ func startPolling(lnfd int) {
 						continue
 					}
 				}
+			}
+
+			if fds[i].Revents&unix.POLLOUT != 0 { // something has gone freed
+				delete(blacklistWrite, fd)
+				fds[i].Events &^= unix.POLLOUT
 			}
 		}
 	}
@@ -147,9 +152,11 @@ func broadcast(bfd int, d []byte) {
 		_, err := unix.Write(fd, d)
 
 		switch {
+		case err == unix.EAGAIN:
+			fds[i].Events |= unix.POLLOUT // wait till poll() says this fd is back to work again
+			blacklistWrite[fd] = struct{}{}
 		case err == unix.EPIPE:
 			blacklistWrite[fd] = struct{}{} // shh. don't talk
-			log.Printf("    %d closed read on their end", fd)
 		case err != nil:
 			unix.Close(fd)
 		}
