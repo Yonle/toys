@@ -9,9 +9,10 @@ import (
 )
 
 type Thread struct {
-	B int // Buffer size
 	L *Listener
 	E *epoll.Instance
+
+	pool *sync.Pool
 
 	bw    map[int]struct{} // blacklist write
 	conns map[int]struct{}
@@ -19,7 +20,7 @@ type Thread struct {
 	bw_mu    sync.RWMutex
 	conns_mu sync.RWMutex
 
-	M chan Data
+	M chan *Data
 }
 
 type Data struct {
@@ -27,21 +28,25 @@ type Data struct {
 	From int // messenger's fd
 }
 
-func MakeThread(L_ADDR string, BUFSIZE int) (t *Thread, err error) {
+func MakeThread(BUFSIZE int) (t *Thread, err error) {
 	t = &Thread{
-		B:     BUFSIZE,
 		bw:    make(map[int]struct{}),
 		conns: make(map[int]struct{}),
 
-		M: make(chan Data),
-	}
-
-	t.L, err = makeListener()
-	if err != nil {
-		return
+		M: make(chan *Data),
+		pool: &sync.Pool{
+			New: func() any {
+				return make([]byte, BUFSIZE)
+			},
+		},
 	}
 
 	t.E, err = epoll.NewInstance(0)
+	return
+}
+
+func (t *Thread) Listen(L_ADDR string) (err error) {
+	t.L, err = makeListener()
 	if err != nil {
 		return
 	}
@@ -127,26 +132,23 @@ func (t *Thread) handleNewConn() {
 }
 
 func (t *Thread) handleClient(fd int) {
-	buf := make([]byte, t.B)
+	buf := t.pool.Get().([]byte)
+	defer t.pool.Put(buf)
 
-	for {
-		n, err := unix.Read(fd, buf)
+	n, err := unix.Read(fd, buf)
 
-		switch {
-		case err == unix.EAGAIN:
-			return // we're done reading
-		case err != nil:
-			t.close(fd)
-			return
-		}
-
-		if n == 0 {
-			t.close(fd)
-			return
-		}
-
-		t.M <- Data{D: buf[:n], From: fd} // send to global channel
+	switch {
+	case err != nil:
+		t.close(fd)
+		return
 	}
+
+	if n == 0 {
+		t.close(fd)
+		return
+	}
+
+	t.M <- &Data{D: buf[:n], From: fd} // send to global channel
 }
 
 func (t *Thread) close(fd int) {
@@ -168,14 +170,14 @@ func (t *Thread) HandleBroadcast() {
 		t.broadcast(data)
 	}
 }
-func (t *Thread) broadcast(data Data) {
+
+func (t *Thread) broadcast(data *Data) {
 	t.conns_mu.RLock()
 	t.bw_mu.RLock()
 
 	defer t.conns_mu.RUnlock()
 	defer t.bw_mu.RUnlock()
 
-	log.Println("new message:", data)
 	for fd := range t.conns {
 		if _, dont := t.bw[fd]; dont || data.From == fd {
 			continue
