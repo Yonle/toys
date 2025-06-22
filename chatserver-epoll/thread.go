@@ -3,7 +3,6 @@ package main
 import (
 	"log"
 	"sync"
-	"syscall"
 
 	"github.com/Yonle/go-epoll"
 	"golang.org/x/sys/unix"
@@ -64,7 +63,7 @@ func MakeThread(L_ADDR string, BUFSIZE int) (t *Thread, err error) {
 }
 
 func (t *Thread) StartWaiting() (err error) {
-	events := make([]syscall.EpollEvent, 512)
+	events := make([]unix.EpollEvent, 512)
 
 	var n int
 	for {
