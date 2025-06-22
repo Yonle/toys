@@ -122,23 +122,23 @@ func handleNewGuest() {
 func handleGuest(fd int) (removeDisFd bool) {
 	buf := make([]byte, BUF_SIZE)
 
-	for {
-		n, err := unix.Read(fd, buf)
-		switch {
-		case err == unix.EAGAIN:
-			return // we're done reading
-		case err != nil:
-			removeDisFd = true
-			return
-		}
-
-		if n == 0 {
-			removeDisFd = true
-			return
-		}
-
-		broadcast(fd, buf[:n])
+	n, err := unix.Read(fd, buf)
+	switch {
+	case err == unix.EAGAIN:
+		return // we're done reading
+	case err != nil:
+		removeDisFd = true
+		return
 	}
+
+	if n == 0 {
+		removeDisFd = true
+		return
+	}
+
+	broadcast(fd, buf[:n])
+
+	return
 }
 
 func broadcast(bfd int, d []byte) {
