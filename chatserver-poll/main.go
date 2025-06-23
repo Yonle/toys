@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"sync"
 
 	"golang.org/x/sys/unix"
 )
@@ -12,6 +13,12 @@ var L_ADDR = "[::1]:1111"
 var l *Listener // listener
 var fds []unix.PollFd
 var blacklistWrite = make(map[int]struct{}) // int -> fd
+
+var pool = &sync.Pool{
+	New: func() any {
+		return make([]byte, BUF_SIZE)
+	},
+}
 
 func main() {
 	var err error
@@ -120,7 +127,8 @@ func handleNewGuest() {
 }
 
 func handleGuest(fd int) (removeDisFd bool) {
-	buf := make([]byte, BUF_SIZE)
+	buf := pool.Get().([]byte)
+	defer pool.Put(buf)
 
 	n, err := unix.Read(fd, buf)
 	switch {
