@@ -14,11 +14,8 @@ type Thread struct {
 
 	pool *sync.Pool
 
-	bw    map[int]struct{} // blacklist write
-	conns map[int]struct{}
-
-	bw_mu    sync.RWMutex
-	conns_mu sync.RWMutex
+	bw    *sync.Map
+	conns *sync.Map
 
 	M chan *Data
 }
@@ -30,8 +27,8 @@ type Data struct {
 
 func MakeThread(BUFSIZE int) (t *Thread, err error) {
 	t = &Thread{
-		bw:    make(map[int]struct{}),
-		conns: make(map[int]struct{}),
+		bw:    &sync.Map{},
+		conns: &sync.Map{},
 
 		M: make(chan *Data),
 		pool: &sync.Pool{
@@ -51,7 +48,7 @@ func (t *Thread) Listen(L_ADDR string) (err error) {
 		return
 	}
 
-	t.bw[t.L.Fd] = struct{}{}
+	t.bw.Store(t.L.Fd, nil)
 
 	ev := epoll.MakeEvent(t.L.Fd, (unix.EPOLLIN | unix.EPOLLRDHUP))
 	err = t.E.Add(t.L.Fd, ev)
@@ -104,9 +101,7 @@ func (t *Thread) StartWaiting() (err error) {
 			}
 
 			if e.Events&unix.EPOLLOUT != 0 { // something is ready to be feed
-				t.bw_mu.Lock()
-				t.bw[fd] = struct{}{}
-				t.bw_mu.Unlock()
+				t.bw.Store(fd, nil)
 			}
 		}
 	}
@@ -125,10 +120,7 @@ func (t *Thread) handleNewConn() {
 	t.E.Add(nfd, ev)
 	log.Printf("  look! new guest! it's fd %d!", nfd)
 
-	defer t.conns_mu.Unlock()
-	t.conns_mu.Lock()
-
-	t.conns[nfd] = struct{}{}
+	t.conns.Store(nfd, nil)
 }
 
 func (t *Thread) handleClient(fd int) {
@@ -154,13 +146,8 @@ func (t *Thread) handleClient(fd int) {
 func (t *Thread) close(fd int) {
 	unix.Close(fd)
 
-	t.conns_mu.Lock()
-	t.bw_mu.Lock()
-	defer t.conns_mu.Unlock()
-	defer t.bw_mu.Unlock()
-
-	delete(t.conns, fd)
-	delete(t.bw, fd)
+	t.conns.Delete(fd)
+	t.bw.Delete(fd)
 
 	t.E.Del(fd, nil)
 }
@@ -172,35 +159,21 @@ func (t *Thread) HandleBroadcast() {
 }
 
 func (t *Thread) broadcast(data *Data) {
-	t.conns_mu.RLock()
-	t.bw_mu.RLock()
-
-	defer t.conns_mu.RUnlock()
-	defer t.bw_mu.RUnlock()
-
-	for fd := range t.conns {
-		if _, dont := t.bw[fd]; dont || data.From == fd {
-			continue
+	t.conns.Range(func(fd, _ any) bool {
+		if _, dont := t.bw.Load(fd); dont || data.From == fd {
+			return true
 		}
 
-		_, err := unix.Write(fd, data.D)
+		_, err := unix.Write(fd.(int), data.D)
 
 		switch {
 		case err == unix.EPIPE:
-			t.bw_mu.RUnlock()
-			t.bw_mu.Lock()
-			t.bw[fd] = struct{}{} // shh. don't talk
-			t.bw_mu.Unlock()
-			t.bw_mu.RLock()
+			t.bw.Store(fd, nil) // shh. don't talk
 			log.Printf("    %d closed read on their end", fd)
 		case err != nil:
-			t.conns_mu.RUnlock()
-			t.bw_mu.RUnlock()
-
-			t.close(fd)
-
-			t.conns_mu.RLock()
-			t.bw_mu.RLock()
+			t.close(fd.(int))
 		}
-	}
+
+		return true
+	})
 }
