@@ -5,12 +5,12 @@ import (
 	"sync"
 )
 
-func main() {
-	var (
-		L_ADDR  = "[::1]:1111"
-		BUFSIZE = 4096
-	)
+var (
+	L_ADDR  = "[::1]:1111"
+	BUFSIZE = 4096
+)
 
+func main() {
 	wg := &sync.WaitGroup{}
 
 	t := 4
@@ -21,7 +21,7 @@ func main() {
 	for i := 0; t > i; i++ {
 		go func() {
 			defer wg.Done()
-			t, err := MakeThread(BUFSIZE)
+			t, err := MakeThread()
 
 			if err != nil {
 				log.Fatalln("failed to make thread:", err)
@@ -34,8 +34,6 @@ func main() {
 			}
 
 			log.Println("Now listening on", L_ADDR)
-
-			go t.HandleBroadcast()
 
 			err = t.StartWaiting()
 

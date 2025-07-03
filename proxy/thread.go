@@ -12,30 +12,12 @@ type Thread struct {
 	L *Listener
 	E *epoll.Instance
 
-	pool *sync.Pool
-
-	bw *sync.Map
-
-	M chan *Data
+	sess *sync.Map // *Session{} (SOCKS5 connection)
 }
 
-var conns = &sync.Map{}
-
-type Data struct {
-	D    []byte
-	From int // messenger's fd
-}
-
-func MakeThread(BUFSIZE int) (t *Thread, err error) {
+func MakeThread() (t *Thread, err error) {
 	t = &Thread{
-		bw: &sync.Map{},
-
-		M: make(chan *Data),
-		pool: &sync.Pool{
-			New: func() any {
-				return make([]byte, BUFSIZE)
-			},
-		},
+		sess: &sync.Map{},
 	}
 
 	t.E, err = epoll.NewInstance(0)
@@ -47,8 +29,6 @@ func (t *Thread) Listen(L_ADDR string) (err error) {
 	if err != nil {
 		return
 	}
-
-	t.bw.Store(t.L.Fd, nil)
 
 	ev := epoll.MakeEvent(t.L.Fd, (unix.EPOLLIN | unix.EPOLLRDHUP))
 	err = t.E.Add(t.L.Fd, ev)
@@ -94,20 +74,18 @@ func (t *Thread) StartWaiting() (err error) {
 			if e.Events&unix.EPOLLIN != 0 { // something is coming
 				switch fd {
 				case t.L.Fd: // from listener
-					t.handleNewConn()
+					t.handle_EPOLLIN_LN()
 				default: // from client
-					t.handleClient(fd)
+					s, _ := t.sess.Load(fd)
+					t.handle_EPOLLIN_C(s.(*Session))
+					t.handle_session_stuffs(s.(*Session))
 				}
-			}
-
-			if e.Events&unix.EPOLLOUT != 0 { // something is ready to be feed
-				t.bw.Store(fd, nil)
 			}
 		}
 	}
 }
 
-func (t *Thread) handleNewConn() {
+func (t *Thread) handle_EPOLLIN_LN() {
 	// let's accept new guest!
 	nfd, _, err := t.L.Accept()
 
@@ -120,60 +98,65 @@ func (t *Thread) handleNewConn() {
 	t.E.Add(nfd, ev)
 	log.Printf("  look! new guest! it's fd %d!", nfd)
 
-	conns.Store(nfd, nil)
+	// we make session
+	t.sess.Store(nfd, MakeSession(nfd))
 }
 
-func (t *Thread) handleClient(fd int) {
-	buf := t.pool.Get().([]byte)
-	defer t.pool.Put(buf)
+func (t *Thread) handle_EPOLLIN_C(s *Session) {
+	n, err := unix.Read(s.Fd, s.rb[s.rl:])
 
-	n, err := unix.Read(fd, buf)
+	s.rl += n
 
-	switch {
-	case err != nil:
-		t.close(fd)
+	switch err {
+	case nil:
+	case unix.EAGAIN:
+		return
+	default:
+		s.State = StateDone
 		return
 	}
 
-	if n == 0 {
-		t.close(fd)
+	if s.rl == 0 {
+		s.State = StateDone
 		return
 	}
 
-	t.M <- &Data{D: buf[:n], From: fd} // send to global channel
+	log.Println("Buf:", s.rb[:s.rl])
+
+	switch s.State {
+	case StateInit:
+		switch s.CheckAuth() {
+		case Yeet_Die: // yeet
+			s.State = StateDone
+			log.Println("YEET THE CONNECTION")
+			return
+		case Yeet_TryAgain: // incomplete data (EAGAIN)
+			log.Println("Try again :>")
+			return
+		case Yeet_InvalidThenDie:
+			log.Println("Invalid. YEET")
+			s.State = StateDone
+			return
+		}
+	case StateNeedCmd:
+		s.CheckCmd()
+	}
+}
+
+func (t *Thread) handle_session_stuffs(s *Session) {
+	if len(s.sb) != 0 {
+		unix.Write(s.Fd, s.sb) // TODO: handle short write
+	}
+
+	switch s.State {
+	case StateDone:
+		t.close(s.Fd)
+		t.sess.Delete(s.Fd)
+		return
+	}
 }
 
 func (t *Thread) close(fd int) {
 	unix.Close(fd)
-
-	conns.Delete(fd)
-	t.bw.Delete(fd)
-
 	t.E.Del(fd, nil)
-}
-
-func (t *Thread) HandleBroadcast() {
-	for data := range t.M {
-		t.broadcast(data)
-	}
-}
-
-func (t *Thread) broadcast(data *Data) {
-	conns.Range(func(fd, _ any) bool {
-		if _, dont := t.bw.Load(fd); dont || data.From == fd {
-			return true
-		}
-
-		_, err := unix.Write(fd.(int), data.D)
-
-		switch {
-		case err == unix.EPIPE:
-			t.bw.Store(fd, nil) // shh. don't talk
-			log.Printf("    %d closed read on their end", fd)
-		case err != nil:
-			t.close(fd.(int))
-		}
-
-		return true
-	})
 }

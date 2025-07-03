@@ -1,0 +1,4 @@
+github.com/Yonle/go-epoll v1.1.1 h1:2ZapfKK0lRG1bpKycy+C+b7aYrb38RGDzmWSQp77qtY=
+github.com/Yonle/go-epoll v1.1.1/go.mod h1:v+Xv/ngrfzW8rK6JGwPjoaNcEXj86wEsO0KV+oLx2ro=
+golang.org/x/sys v0.33.0 h1:q3i8TbbEz+JRD9ywIRlyRAQbM0qF7hu24q3teo2hbuw=
+golang.org/x/sys v0.33.0/go.mod h1:BJP2sWEmIv4KK5OTEluFJCKSidICx8ciO85XgH3Ak8k=
