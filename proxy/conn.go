@@ -23,3 +23,18 @@ func MakeTCPConn(inettype int, sa unix.Sockaddr) (fd int, err error) {
 
 	return
 }
+
+func connectTo(atyp byte, addr, port []byte) (fd int, err error) {
+	var inettype int
+
+	switch atyp {
+	case Atyp_Inet4:
+		inettype = unix.AF_INET
+	case Atyp_Inet6:
+		inettype = unix.AF_INET6
+	case Atyp_Name:
+		// todo: make it resolve
+	}
+
+	return
+}

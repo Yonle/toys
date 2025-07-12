@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"log"
 	"slices"
 )
@@ -46,9 +47,9 @@ const (
 	Ver = byte(0x05) // Version
 	Res = byte(0x00) // Reserved
 
-	AddrType_Inet4 = byte(0x01)
-	AddrType_Inet6 = byte(0x04)
-	AddrType_Name  = byte(0x03)
+	Atyp_Inet4 = byte(0x01)
+	Atyp_Inet6 = byte(0x04)
+	Atyp_Name  = byte(0x03)
 
 	// Client to server
 	Auth_NoAuth   = byte(0x00)
@@ -158,12 +159,12 @@ func (s *Session) CmdConnect() (yeet Yeet) {
 	exp_len := 4
 
 	switch d[3] {
-	case AddrType_Inet4:
+	case Atyp_Inet4:
 		// TODO: connect to the inet4 host
 		exp_len += 4 + 2
-	case AddrType_Inet6:
+	case Atyp_Inet6:
 		exp_len += 16 + 2
-	case AddrType_Name:
+	case Atyp_Name:
 		exp_len += 1
 		if s.rl < exp_len {
 			yeet = Yeet_TryAgain
@@ -182,7 +183,14 @@ func (s *Session) CmdConnect() (yeet Yeet) {
 		return
 	}
 
-	log.Println("Addr Buf:", d)
+	addrB := d[4 : len(d)-2]
+	portB := d[len(d)-2:]
+
+	port := binary.BigEndian.Uint16(portB)
+
+	log.Println("Addr Buf:", addrB)
+	log.Println("Port Buf:", portB)
+	log.Println("Parsed Port:", port)
 
 	// TODO: convert these d[4] and above to unix.Sockaddr compliant
 
