@@ -16,6 +16,7 @@ func makeListener() (l *Listener, err error) {
 		(unix.SOCK_STREAM | unix.SOCK_CLOEXEC | unix.SOCK_NONBLOCK),
 		unix.IPPROTO_TCP,
 	)
+
 	if err != nil {
 		return
 	}

@@ -184,6 +184,8 @@ func (s *Session) CmdConnect() (yeet Yeet) {
 
 	log.Println("Addr Buf:", d)
 
+	// TODO: convert these d[4] and above to unix.Sockaddr compliant
+
 	// TODO: make connection
 
 	return
