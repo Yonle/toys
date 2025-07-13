@@ -117,13 +117,13 @@ func (s *Session) CheckAuth() (yeet Yeet) {
 
 	if !slices.Contains(d[2:], Auth_NoAuth) {
 		yeet = Yeet_InvalidThenDie
-		copy(s.sb[:], []byte{Ver, Auth_NoMethod})
+		s.sb = append(s.sb[:0], Ver, Auth_NoMethod)
 		s.sl = len(s.sb)
 		return
 	}
 
 	s.State = StateNeedCmd
-	copy(s.sb[:], []byte{Ver, Auth_NoAuth})
+	s.sb = append(s.sb[:0], Ver, Auth_NoAuth)
 	s.sl = len(s.sb)
 	s.rl -= metalen
 
@@ -193,6 +193,9 @@ func (s *Session) CmdConnect() (yeet Yeet) {
 		cut += 1
 	}
 
+	s.rl -= exp_len
+	s.rb = s.rb[:0]
+
 	addrB := d[cut : len(d)-2]
 	portB := d[len(d)-2:]
 
@@ -210,6 +213,8 @@ func (s *Session) CmdConnect() (yeet Yeet) {
 
 	if err != nil {
 		// do something...
+		s.SrvReply(Rep_Fail, fd)
+		return
 	}
 
 	s.SrvReply(Rep_Success, fd)
@@ -220,26 +225,30 @@ func (s *Session) CmdConnect() (yeet Yeet) {
 }
 
 func (s *Session) SrvReply(rep byte, fd int) error {
-	resp := []byte{Ver, rep, Res}
-
 	bindsa, err := unix.Getsockname(fd)
 
 	if err != nil {
 		return err
 	}
 
+	var atyp byte
+	var ip []byte
+	port := make([]byte, 2)
+
 	switch v := bindsa.(type) {
 	case *unix.SockaddrInet4:
-		copy(resp[len(resp):], []byte{Atyp_Inet4})
-		copy(resp[len(resp):], v.Addr[:])
-		binary.BigEndian.PutUint16(resp[len(resp):], uint16(v.Port))
+		atyp = Atyp_Inet4
+		ip = v.Addr[:]
+		binary.BigEndian.PutUint16(port, uint16(v.Port))
 	case *unix.SockaddrInet6:
-		copy(resp[len(resp):], []byte{Atyp_Inet4})
-		copy(resp[len(resp):], v.Addr[:])
-		binary.BigEndian.PutUint16(resp[len(resp):], uint16(v.Port))
+		atyp = Atyp_Inet6
+		ip = v.Addr[:]
+		binary.BigEndian.PutUint16(port, uint16(v.Port))
 	}
 
-	copy(s.sb[:], resp)
+	s.sb = append(s.sb[:0], Ver, rep, Res, atyp)
+	s.sb = append(s.sb, ip...)
+	s.sb = append(s.sb, port...)
 	s.sl = len(s.sb)
 	return nil
 }

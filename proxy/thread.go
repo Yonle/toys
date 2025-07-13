@@ -144,8 +144,9 @@ func (t *Thread) handle_EPOLLIN_C(s *Session) {
 }
 
 func (t *Thread) handle_session_stuffs(s *Session) {
-	if len(s.sb) != 0 {
-		unix.Write(s.Fd, s.sb) // TODO: handle short write
+	if s.sl != 0 {
+		log.Println(s.sl, s.sb)
+		unix.Write(s.Fd, s.sb[:s.sl]) // TODO: handle short write
 	}
 
 	switch s.State {
