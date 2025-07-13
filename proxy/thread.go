@@ -99,7 +99,7 @@ func (t *Thread) handle_EPOLLIN_LN() {
 	log.Printf("  look! new guest! it's fd %d!", nfd)
 
 	// we make session
-	t.sess.Store(nfd, MakeSession(nfd))
+	t.sess.Store(nfd, t.MakeSession(nfd))
 }
 
 func (t *Thread) handle_EPOLLIN_C(s *Session) {

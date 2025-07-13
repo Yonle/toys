@@ -4,6 +4,9 @@ import (
 	"encoding/binary"
 	"log"
 	"slices"
+
+	"github.com/Yonle/go-epoll"
+	"golang.org/x/sys/unix"
 )
 
 type ST int
@@ -30,6 +33,7 @@ type Destination struct {
 }
 
 type Session struct {
+	E      *epoll.Instance
 	Fd     int
 	State  ST
 	Method byte
@@ -72,8 +76,9 @@ const (
 	Rep_UnsupportedAddr = byte(0x08)
 )
 
-func MakeSession(fd int) *Session {
+func (t *Thread) MakeSession(fd int) *Session {
 	return &Session{
+		E:     t.E,
 		Fd:    fd,
 		State: StateInit,
 		rb:    make([]byte, BUFSIZE),
@@ -112,13 +117,13 @@ func (s *Session) CheckAuth() (yeet Yeet) {
 
 	if !slices.Contains(d[2:], Auth_NoAuth) {
 		yeet = Yeet_InvalidThenDie
-		s.sb = []byte{Ver, Auth_NoMethod}
+		copy(s.sb[:], []byte{Ver, Auth_NoMethod})
 		s.sl = len(s.sb)
 		return
 	}
 
 	s.State = StateNeedCmd
-	s.sb = []byte{Ver, Auth_NoAuth}
+	copy(s.sb[:], []byte{Ver, Auth_NoAuth})
 	s.sl = len(s.sb)
 	s.rl -= metalen
 
@@ -160,7 +165,6 @@ func (s *Session) CmdConnect() (yeet Yeet) {
 
 	switch d[3] {
 	case Atyp_Inet4:
-		// TODO: connect to the inet4 host
 		exp_len += 4 + 2
 	case Atyp_Inet6:
 		exp_len += 16 + 2
@@ -183,7 +187,13 @@ func (s *Session) CmdConnect() (yeet Yeet) {
 		return
 	}
 
-	addrB := d[4 : len(d)-2]
+	cut := 4
+
+	if d[3] == Atyp_Name {
+		cut += 1
+	}
+
+	addrB := d[cut : len(d)-2]
 	portB := d[len(d)-2:]
 
 	port := binary.BigEndian.Uint16(portB)
@@ -192,9 +202,44 @@ func (s *Session) CmdConnect() (yeet Yeet) {
 	log.Println("Port Buf:", portB)
 	log.Println("Parsed Port:", port)
 
-	// TODO: convert these d[4] and above to unix.Sockaddr compliant
+	if d[3] == Atyp_Name {
+		log.Println("Domain request:", string(addrB))
+	}
 
-	// TODO: make connection
+	fd, err := s.ConnectTo(d[3], addrB, portB)
+
+	if err != nil {
+		// do something...
+	}
+
+	s.SrvReply(Rep_Success, fd)
+
+	// pipe one to each other...
 
 	return
+}
+
+func (s *Session) SrvReply(rep byte, fd int) error {
+	resp := []byte{Ver, rep, Res}
+
+	bindsa, err := unix.Getsockname(fd)
+
+	if err != nil {
+		return err
+	}
+
+	switch v := bindsa.(type) {
+	case *unix.SockaddrInet4:
+		copy(resp[len(resp):], []byte{Atyp_Inet4})
+		copy(resp[len(resp):], v.Addr[:])
+		binary.BigEndian.PutUint16(resp[len(resp):], uint16(v.Port))
+	case *unix.SockaddrInet6:
+		copy(resp[len(resp):], []byte{Atyp_Inet4})
+		copy(resp[len(resp):], v.Addr[:])
+		binary.BigEndian.PutUint16(resp[len(resp):], uint16(v.Port))
+	}
+
+	copy(s.sb[:], resp)
+	s.sl = len(s.sb)
+	return nil
 }
