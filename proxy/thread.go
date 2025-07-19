@@ -1,5 +1,8 @@
 package main
 
+// This code handles incomming connection and threading stuff.
+// SOCKS5 logic is on socks5.go
+
 import (
 	"log"
 	"sync"
@@ -68,6 +71,25 @@ func (t *Thread) StartWaiting() (err error) {
 
 			if e.Events&(unix.EPOLLHUP|unix.EPOLLERR|unix.EPOLLRDHUP) != 0 {
 				t.close(fd)
+				continue
+			}
+
+			if e.Events&unix.EPOLLOUT != 0 {
+				if s, ok := t.sess.Load(fd); ok {
+					if _, err := unix.GetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_ERROR); err != nil {
+						s.(*Session).State = StateDone // close.
+						s.(*Session).SrvReply(Rep_ConnRefused, fd)
+					} else {
+						s.(*Session).State = StateEstablished
+						s.(*Session).SrvReply(Rep_Success, fd)
+						se := epoll.MakeEvent(fd, (unix.EPOLLIN | unix.EPOLLRDHUP))
+						t.E.Mod(fd, se)
+					}
+
+					t.handle_session_stuffs(s.(*Session))
+				}
+
+				// TODO: Feed to each other
 				continue
 			}
 
@@ -140,6 +162,10 @@ func (t *Thread) handle_EPOLLIN_C(s *Session) {
 		}
 	case StateNeedCmd:
 		s.CheckCmd()
+
+		if s.DestFD != 0 {
+			t.sess.Store(s.DestFD, s)
+		}
 	}
 }
 
@@ -153,6 +179,11 @@ func (t *Thread) handle_session_stuffs(s *Session) {
 	case StateDone:
 		t.close(s.Fd)
 		t.sess.Delete(s.Fd)
+
+		if s.DestFD != 0 {
+			t.close(s.DestFD)
+			t.sess.Delete(s.DestFD)
+		}
 		return
 	}
 }

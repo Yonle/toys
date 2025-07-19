@@ -1,5 +1,8 @@
 package main
 
+// This code is just the starter.
+// The real logic lies in thread.go
+
 import (
 	"log"
 	"sync"

@@ -1,5 +1,8 @@
 package main
 
+// This is where SOCKS5 logic lives.
+// Socket creation is on conn.go
+
 import (
 	"encoding/binary"
 	"log"
@@ -13,11 +16,12 @@ type ST int
 type Yeet int
 
 const (
-	StateInit       = ST(000)
-	StateNeedMethod = ST(100)
-	StatePlainAuth  = ST(102)
-	StateNeedCmd    = ST(200)
-	StateDone       = ST(255)
+	StateInit        = ST(000)
+	StateNeedMethod  = ST(100)
+	StatePlainAuth   = ST(102)
+	StateNeedCmd     = ST(200)
+	StateEstablished = ST(255)
+	StateDone        = ST(300)
 )
 
 const (
@@ -35,6 +39,7 @@ type Destination struct {
 type Session struct {
 	E      *epoll.Instance
 	Fd     int
+	DestFD int
 	State  ST
 	Method byte
 	Auth   byte
@@ -213,13 +218,15 @@ func (s *Session) CmdConnect() (yeet Yeet) {
 
 	if err != nil {
 		// do something...
+		log.Println("fail to make socket() / connect():", err)
 		s.SrvReply(Rep_Fail, fd)
 		return
 	}
 
-	s.SrvReply(Rep_Success, fd)
+	s.DestFD = fd
 
-	// pipe one to each other...
+	se := epoll.MakeEvent(fd, unix.EPOLLOUT)
+	s.E.Add(fd, se)
 
 	return
 }
@@ -251,4 +258,10 @@ func (s *Session) SrvReply(rep byte, fd int) error {
 	s.sb = append(s.sb, port...)
 	s.sl = len(s.sb)
 	return nil
+}
+
+// to client
+func (s *Session) Write(b []byte) {
+	s.sb = append(s.sb[:0], b...)
+	s.sl = len(b)
 }

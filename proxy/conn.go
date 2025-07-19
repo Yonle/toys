@@ -1,5 +1,8 @@
 package main
 
+// This code is for making socketfd to the upstream.
+// Used by socks5.go
+
 import (
 	"encoding/binary"
 	"golang.org/x/sys/unix"
@@ -8,7 +11,7 @@ import (
 func (s *Session) MakeTCPConn(inettype int, sa unix.Sockaddr) (fd int, err error) {
 	fd, err = unix.Socket(
 		inettype,
-		unix.SOCK_STREAM,
+		(unix.SOCK_STREAM | unix.SOCK_NONBLOCK),
 		unix.IPPROTO_TCP,
 	)
 
@@ -16,13 +19,7 @@ func (s *Session) MakeTCPConn(inettype int, sa unix.Sockaddr) (fd int, err error
 		return
 	}
 
-	// TODO: make it nonblocking and put it to Epoll instance
-
-	err = unix.Connect(fd, sa)
-
-	if err != nil {
-		return
-	}
+	unix.Connect(fd, sa)
 
 	return
 }
